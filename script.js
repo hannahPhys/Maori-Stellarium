@@ -9,58 +9,92 @@ const camera = new THREE.PerspectiveCamera(
   5000
 );
 camera.position.set(0, 50, 200); // X, Y, Z coordinates
-camera.lookAt(0, 0, 0); // Looking along positive Y-axis
+camera.lookAt(0, 0, 0); // Looking at the origin
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(window.devicePixelRatio); // For high-DPI screens
 document.body.appendChild(renderer.domElement);
 
-// Convert RA and Dec to Cartesian coordinates (Y-up)
-function convertToCartesian(ra, dec, radius = 1000) {
-  const raRad = THREE.Math.degToRad(ra); // Convert RA to radians
-  const decRad = THREE.Math.degToRad(dec); // Convert Dec to radians
+// Observer's Location (Queenstown, New Zealand)
+const observerLatitude = -45.0312; // Degrees
+const observerLongitude = 168.6626; // Degrees East
 
-  const x = radius * Math.cos(decRad) * Math.cos(raRad);
-  const y = radius * Math.sin(decRad); // Y corresponds to Dec
-  const z = radius * Math.cos(decRad) * Math.sin(raRad);
+// Function to compute Julian Date
+function getJulianDate(date) {
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth() + 1; // Months are zero-based in JS
+  const day = date.getUTCDate();
+  const hour = date.getUTCHours();
+  const minute = date.getUTCMinutes();
+  const second = date.getUTCSeconds();
 
-  return { x, y, z };
+  let A = Math.floor(year / 100);
+  let B = 2 - A + Math.floor(A / 4);
+
+  if (month <= 2) {
+    year -= 1;
+    month += 12;
+  }
+
+  const JD =
+    Math.floor(365.25 * (year + 4716)) +
+    Math.floor(30.6001 * (month + 1)) +
+    day +
+    B -
+    1524.5 +
+    (hour + minute / 60 + second / 3600) / 24;
+
+  return JD;
 }
 
-//Manual current location
-// const observerLatitude = -45.0312; // Queenstown, New Zealand
-// const observerLongitude = 168.6626;
-// const observerElevation = 0; // Elevation in meters
+// Function to compute Greenwich Mean Sidereal Time (GMST)
+function getGMST(date) {
+  const JD = getJulianDate(date);
+  const T = (JD - 2451545.0) / 36525.0;
+  let GMST =
+    280.46061837 +
+    360.98564736629 * (JD - 2451545.0) +
+    0.000387933 * T * T -
+    (T * T * T) / 38710000.0;
 
-function getSiderealTime(longitude) {
+  GMST = GMST % 360.0;
+  if (GMST < 0) GMST += 360.0;
+  return GMST; // In degrees
+}
+
+// Function to compute Local Sidereal Time (LST)
+function getLocalSiderealTime(longitude) {
   const now = new Date();
-  const jd = now.getTime() / 86400000 + 2440587.5; // Julian date
-  const T = (jd - 2451545.0) / 36525; // Julian centuries from J2000.0
-
-  // Greenwich Mean Sidereal Time in degrees
-  const GMST = (280.46061837 + 360.98564736629 * (jd - 2451545.0)) % 360;
-
-  // Local Sidereal Time
-  const LST = (GMST + longitude) % 360; // Include longitude correction
-  return LST < 0 ? LST + 360 : LST; // Normalize to [0, 360)
+  const GMST = getGMST(now);
+  let LST = GMST + longitude;
+  LST = LST % 360.0;
+  if (LST < 0) LST += 360.0;
+  return LST; // In degrees
 }
 
+// Function to convert Equatorial Coordinates to Horizontal Coordinates
 function equatorialToHorizontal(ra, dec, latitude, lst) {
-  const raRad = THREE.Math.degToRad(ra * 15); // RA in radians
+  const raRad = THREE.Math.degToRad(ra); // RA in radians
   const decRad = THREE.Math.degToRad(dec); // Dec in radians
   const latRad = THREE.Math.degToRad(latitude);
   const lstRad = THREE.Math.degToRad(lst);
 
-  const hourAngle = lstRad - raRad;
+  let H = lstRad - raRad; // Hour Angle in radians
+  H = ((H + Math.PI) % (2 * Math.PI)) - Math.PI; // Normalize H to [-π, π)
 
-  const altitude = Math.asin(
-    Math.sin(decRad) * Math.sin(latRad) + Math.cos(decRad) * Math.cos(latRad) * Math.cos(hourAngle)
-  );
-  const azimuth = Math.atan2(
-    -Math.cos(decRad) * Math.sin(hourAngle),
-    Math.sin(decRad) - Math.sin(latRad) * Math.sin(altitude)
-  );
+  const sinAlt =
+    Math.sin(decRad) * Math.sin(latRad) +
+    Math.cos(decRad) * Math.cos(latRad) * Math.cos(H);
+  const altitude = Math.asin(sinAlt);
+
+  const cosAz =
+    (Math.sin(decRad) - Math.sin(altitude) * Math.sin(latRad)) /
+    (Math.cos(altitude) * Math.cos(latRad));
+  const sinAz = (-Math.cos(decRad) * Math.sin(H)) / Math.cos(altitude);
+  let azimuth = Math.atan2(sinAz, cosAz);
+
+  azimuth = (azimuth + 2 * Math.PI) % (2 * Math.PI); // Normalize to [0, 2π)
 
   return {
     altitude: THREE.Math.radToDeg(altitude),
@@ -75,12 +109,14 @@ function createStarField() {
   const starColors = [];
   const starHitboxes = []; // Array to store invisible spheres for raycasting
 
+  // Get Local Sidereal Time
+  const lst = getLocalSiderealTime(observerLongitude);
 
   hipparcos_catalog.forEach((star) => {
     const hip = star[0];
     const mag = parseFloat(star[1]);
-    const ra = parseFloat(star[2]);
-    const dec = parseFloat(star[3]);
+    const ra = parseFloat(star[2]); // RA in degrees
+    const dec = parseFloat(star[3]); // Dec in degrees
     const bv = parseFloat(star[4]);
 
     if (isNaN(ra) || isNaN(dec) || isNaN(mag)) return;
@@ -88,33 +124,39 @@ function createStarField() {
     // Adjust magnitude limit as needed
     if (mag > 7.0) return;
 
-    
-    //const lst = getSiderealTime(observerLongitude);
-    //const { altitude, azimuth } = equatorialToHorizontal(ra, dec, observerLatitude, lst);
+    // Convert Equatorial Coordinates to Horizontal Coordinates
+    const { altitude, azimuth } = equatorialToHorizontal(
+      ra,
+      dec,
+      observerLatitude,
+      lst
+    );
 
-    //if (altitude < 0) return; // Skip stars below the horizon
+    if (altitude < 0) return; // Skip stars below the horizon
 
-    // const radius = 1000;
-    // const x = radius * Math.cos(THREE.Math.degToRad(altitude)) * Math.sin(THREE.Math.degToRad(azimuth));
-    // const y = radius * Math.sin(THREE.Math.degToRad(altitude));
-    // const z = radius * Math.cos(THREE.Math.degToRad(altitude)) * Math.cos(THREE.Math.degToRad(azimuth));
-    
-    const { x, y, z } = convertToCartesian(ra, dec);
+    // Convert Altitude and Azimuth to Cartesian coordinates
+    const radius = 1000;
+    const altRad = THREE.Math.degToRad(altitude);
+    const azRad = THREE.Math.degToRad(azimuth);
+
+    const x = radius * Math.cos(altRad) * Math.sin(azRad);
+    const y = radius * Math.sin(altRad);
+    const z = radius * Math.cos(altRad) * Math.cos(azRad);
+
     starPositions.push(x, y, z);
 
     const size = Math.max(1.0, 6 - mag * 1);
     starSizes.push(size);
 
-    const color =  new THREE.Color(0xffffff) ;
+    const color = new THREE.Color(0xffffff);
     starColors.push(color.r, color.g, color.b);
 
-      // Add invisible sphere for raycasting
+    // Add invisible sphere for raycasting
     const hitboxGeometry = new THREE.SphereGeometry(40); // Adjust size as needed
     const hitboxMaterial = new THREE.MeshBasicMaterial({ visible: false }); // Invisible material
     const hitbox = new THREE.Mesh(hitboxGeometry, hitboxMaterial);
     hitbox.position.set(x, y, z);
     hitbox.userData = { name: starNameMapping[hip] }; // Store star name in userData
-    //if (hip == 68702) 
 
     scene.add(hitbox);
     starHitboxes.push(hitbox); // Add to raycasting array
@@ -151,81 +193,51 @@ function createStarField() {
   const stars = new THREE.Points(starGeometry, starMaterial);
   scene.add(stars);
 
-  function addSouthPoint() {
-    const sigmaOctantis = {
-      ra: 317, // Right Ascension in degrees
-      dec: -88.95, // Declination in degrees
-    };
-  
-    // Calculate the position of the South Celestial Pole
-    const lst = getSiderealTime(observerLongitude);
-    const { altitude, azimuth } = equatorialToHorizontal(
-      sigmaOctantis.ra,
-      sigmaOctantis.dec,
-      observerLatitude,
-      lst
-    );
-  
-    const radius = 1000; // Same radius as the stars
-    const x = radius * Math.cos(THREE.Math.degToRad(altitude)) * Math.sin(THREE.Math.degToRad(azimuth));
-    const y = radius * Math.sin(THREE.Math.degToRad(altitude));
-    const z = radius * Math.cos(THREE.Math.degToRad(altitude)) * Math.cos(THREE.Math.degToRad(azimuth));
-  
-    // Create a small dot to represent the South Celestial Pole
-    const southPointGeometry = new THREE.SphereGeometry(10, 16, 16); // Adjust size as needed
-    const southPointMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 }); // Red color for visibility
-    const southPoint = new THREE.Mesh(southPointGeometry, southPointMaterial);
-    southPoint.position.set(x, y, z);
-  
-    scene.add(southPoint);
+  // Raycasting for Hover Detection
+  const raycaster = new THREE.Raycaster();
+  const mouse = new THREE.Vector2();
+
+  // Tooltip setup
+  const tooltip = document.createElement('div');
+  tooltip.style.position = 'absolute';
+  tooltip.style.padding = '5px';
+  tooltip.style.background = 'rgba(0, 0, 0, 0.7)';
+  tooltip.style.color = 'white';
+  tooltip.style.borderRadius = '5px';
+  tooltip.style.display = 'none'; // Initially hidden
+  document.body.appendChild(tooltip);
+
+  // Handle Mouse Move for Hover Detection
+  function onMouseMove(event) {
+    // Normalize mouse coordinates
+    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+    // Perform raycasting
+    raycaster.setFromCamera(mouse, camera);
+    const intersects = raycaster.intersectObjects(starHitboxes);
+
+    if (intersects.length > 0) {
+      // Determine the closest star
+      const intersectedStar = intersects[0].object;
+      const star = intersectedStar?.userData?.name;
+
+      if (!star) {
+        tooltip.style.display = 'none';
+        return;
+      }
+
+      tooltip.style.display = 'block';
+      tooltip.style.left = `${event.clientX + 10}px`;
+      tooltip.style.top = `${event.clientY + 10}px`;
+      tooltip.textContent = star?.commonName; // Show the common name
+    } else {
+      tooltip.style.display = 'none'; // Hide tooltip if no star is hovered
+    }
   }
-  
-  // Call this function after creating the star field
-  //addSouthPoint();
 
-// Raycasting for Hover Detection
-const raycaster = new THREE.Raycaster();
-const mouse = new THREE.Vector2();
-
-// Tooltip setup
-const tooltip = document.createElement('div');
-tooltip.style.position = 'absolute';
-tooltip.style.padding = '5px';
-tooltip.style.background = 'rgba(0, 0, 0, 0.7)';
-tooltip.style.color = 'white';
-tooltip.style.borderRadius = '5px';
-tooltip.style.display = 'none'; // Initially hidden
-document.body.appendChild(tooltip);
-
-// Handle Mouse Move for Hover Detection
-function onMouseMove(event) {
-  // Normalize mouse coordinates
-  mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-  mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
-
-  // Perform raycasting
-  raycaster.setFromCamera(mouse, camera);
-  const intersects = raycaster.intersectObjects(starHitboxes);
-
-  if (intersects.length > 0) {
-    // Determine the closest star
-    const intersectedStar = intersects[0].object;
-    const star = intersectedStar?.userData?.name;
-
-    if (!star) { tooltip.style.display = 'none';  return; }
-
-    tooltip.style.display = 'block';
-    tooltip.style.left = `${event.clientX + 10}px`;
-    tooltip.style.top = `${event.clientY + 10}px`;
-    tooltip.textContent = star?.commonName; // Show the maori name first star?.maoriName || 
-    
-  } else {
-    tooltip.style.display = 'none'; // Hide tooltip if no star is hovered
-  }
-}
-
-// Attach mouse move event listener
-window.addEventListener('mousemove', onMouseMove);
+  // Attach mouse move event listener
+  window.addEventListener('mousemove', onMouseMove);
 }
 
 createStarField();
@@ -237,23 +249,13 @@ controls.dampingFactor = 0.1;
 controls.minDistance = 0.1;
 controls.maxDistance = 2000;
 
-// Remove vertical rotation limits to allow full 360-degree view
-// controls.minPolarAngle = 0;
-// controls.maxPolarAngle = Math.PI;
-
-// Allow full horizontal rotation
+// Allow full horizontal and vertical rotation
+controls.minPolarAngle = 0;
+controls.maxPolarAngle = Math.PI;
 controls.minAzimuthAngle = -Infinity;
 controls.maxAzimuthAngle = Infinity;
 
 controls.update();
-
-// Optional: Add a ground plane or horizon for reference
-// const groundGeometry = new THREE.PlaneGeometry(4000, 4000);
-// const groundMaterial = new THREE.MeshBasicMaterial({ color: 0x222222 });
-// const ground = new THREE.Mesh(groundGeometry, groundMaterial);
-// ground.rotation.x = -Math.PI / 2; // Rotate to be horizontal
-// ground.position.y = -10; // Slightly below the origin
-// scene.add(ground);
 
 // Animation Loop
 function animate() {
