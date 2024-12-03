@@ -1,0 +1,7 @@
+body {
+  margin: 0;
+  overflow: hidden; /* Ensures the canvas fills the window */
+}
+canvas {
+  display: block;
+}
