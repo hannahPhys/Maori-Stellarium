@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -10,11 +11,19 @@
   <link rel="icon" type="image/png" sizes="16x16" href="favicon_io/favicon-16x16.png">
   <link rel="manifest" href="favicon_io/site.webmanifest">
 </head>
+
 <body>
+  <!-- Include your data files -->
   <script src="hipparcos_catalog_concise.js"></script>
   <script src="starnames.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+  <script src="constellations.js"></script>
+  <!-- Include Three.js and its add-ons -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.134.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.134.0/examples/js/math/ConvexHull.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.134.0/examples/js/geometries/ConvexGeometry.js"></script>
+  <!-- Include your main script -->
   <script src="script.js"></script>
 </body>
+
 </html>
