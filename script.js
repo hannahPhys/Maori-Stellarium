@@ -1,4 +1,3 @@
-
 // Scene, Camera, Renderer
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x000000); // Set background to black
@@ -9,7 +8,7 @@ const camera = new THREE.PerspectiveCamera(
   0.1,
   5000
 );
-camera.position.set(0, 50, 200); // X, Y, Z coordinates
+camera.position.set(0, -100, 200); // X, Y, Z coordinates
 camera.lookAt(0, 0, 0); // Looking at the origin
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -21,87 +20,6 @@ document.body.appendChild(renderer.domElement);
 const observerLatitude = -45.0312; // Degrees
 const observerLongitude = 168.6626; // Degrees East
 
-// Function to compute Julian Date
-function getJulianDate(date) {
-  const year = date.getUTCFullYear();
-  const month = date.getUTCMonth() + 1; // Months are zero-based in JS
-  const day = date.getUTCDate();
-  const hour = date.getUTCHours();
-  const minute = date.getUTCMinutes();
-  const second = date.getUTCSeconds();
-
-  let A = Math.floor(year / 100);
-  let B = 2 - A + Math.floor(A / 4);
-
-  if (month <= 2) {
-    year -= 1;
-    month += 12;
-  }
-
-  const JD =
-    Math.floor(365.25 * (year + 4716)) +
-    Math.floor(30.6001 * (month + 1)) +
-    day +
-    B -
-    1524.5 +
-    (hour + minute / 60 + second / 3600) / 24;
-
-  return JD;
-}
-
-// Function to compute Greenwich Mean Sidereal Time (GMST)
-function getGMST(date) {
-  const JD = getJulianDate(date);
-  const T = (JD - 2451545.0) / 36525.0;
-  let GMST =
-    280.46061837 +
-    360.98564736629 * (JD - 2451545.0) +
-    0.000387933 * T * T -
-    (T * T * T) / 38710000.0;
-
-  GMST = GMST % 360.0;
-  if (GMST < 0) GMST += 360.0;
-  return GMST; // In degrees
-}
-
-// Function to compute Local Sidereal Time (LST)
-function getLocalSiderealTime(longitude) {
-  const now = new Date();
-  const GMST = getGMST(now);
-  let LST = GMST + longitude;
-  LST = LST % 360.0;
-  if (LST < 0) LST += 360.0;
-  return LST; // In degrees
-}
-
-// Function to convert Equatorial Coordinates to Horizontal Coordinates
-function equatorialToHorizontal(ra, dec, latitude, lst) {
-  const raRad = THREE.Math.degToRad(ra); // RA in radians
-  const decRad = THREE.Math.degToRad(dec); // Dec in radians
-  const latRad = THREE.Math.degToRad(latitude);
-  const lstRad = THREE.Math.degToRad(lst);
-
-  let H = lstRad - raRad; // Hour Angle in radians
-  H = ((H + Math.PI) % (2 * Math.PI)) - Math.PI; // Normalize H to [-π, π)
-
-  const sinAlt =
-    Math.sin(decRad) * Math.sin(latRad) +
-    Math.cos(decRad) * Math.cos(latRad) * Math.cos(H);
-  const altitude = Math.asin(sinAlt);
-
-  const cosAz =
-    (Math.sin(decRad) - Math.sin(altitude) * Math.sin(latRad)) /
-    (Math.cos(altitude) * Math.cos(latRad));
-  const sinAz = (-Math.cos(decRad) * Math.sin(H)) / Math.cos(altitude);
-  let azimuth = Math.atan2(sinAz, cosAz);
-
-  azimuth = (azimuth + 2 * Math.PI) % (2 * Math.PI); // Normalize to [0, 2π)
-
-  return {
-    altitude: THREE.Math.radToDeg(altitude),
-    azimuth: THREE.Math.radToDeg(azimuth),
-  };
-}
 const starPositionsByHip = {};
 // Create the star field
 function createStarField() {
@@ -110,7 +28,7 @@ function createStarField() {
   const starColors = [];
   const starHitboxes = []; // Array to store invisible spheres for raycasting
   // Get Local Sidereal Time
-  const lst = getLocalSiderealTime(observerLongitude);
+  const lst = Utils.getLocalSiderealTime(observerLongitude);
 
   hipparcos_catalog.forEach((star) => {
     const hip = star[0];
@@ -122,10 +40,10 @@ function createStarField() {
     if (isNaN(ra) || isNaN(dec) || isNaN(mag)) return;
 
     // Adjust magnitude limit as needed
-    if (mag > 7.0) return;
+    if (mag > 6.5) return;
 
     // Convert Equatorial Coordinates to Horizontal Coordinates
-    const { altitude, azimuth } = equatorialToHorizontal(
+    const { altitude, azimuth } = Utils.equatorialToHorizontal(
       ra,
       dec,
       observerLatitude,
@@ -146,10 +64,11 @@ function createStarField() {
     starPositions.push(x, y, z);
     starPositionsByHip[hip] = { x, y, z };
 
-    const size = Math.max(1.0, 6 - mag * 1);
+    const size = Math.max(1.0, 5 - mag * 1.2);
     starSizes.push(size);
 
-    const color = new THREE.Color(0xffffff);
+    const colorComponents = bv ? Utils.bvToRgb(bv) : { r: 1, g: 1, b: 1 };
+    const color = new THREE.Color(colorComponents.r, colorComponents.g, colorComponents.b);
     starColors.push(color.r, color.g, color.b);
 
     // Add invisible sphere for raycasting
@@ -171,24 +90,39 @@ function createStarField() {
     new THREE.Float32BufferAttribute(starPositions, 3)
   );
   starGeometry.setAttribute(
+    'color',
+    new THREE.Float32BufferAttribute(starColors, 3)
+  );
+  starGeometry.setAttribute(
     'size',
     new THREE.Float32BufferAttribute(starSizes, 1)
   );
 
   const starMaterial = new THREE.ShaderMaterial({
-    uniforms: { color: { value: new THREE.Color(0xffffff) } },
+    vertexColors: true,
     vertexShader: `
       attribute float size;
+      varying vec3 vColor;
+
       void main() {
+        vColor = color;
         gl_PointSize = size;
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
       }
     `,
     fragmentShader: `
-      uniform vec3 color;
+      varying vec3 vColor;
+
       void main() {
-        gl_FragColor = vec4(color, 1.0);
-      }
+        // Calculate the distance from the center of the point
+        float dist = length(gl_PointCoord - vec2(0.3));
+        
+        // If the fragment is outside the circle, discard it
+        if (dist > 0.3) discard;
+        
+        // Set the fragment color
+        gl_FragColor = vec4(vColor, 1.0);
+      } 
     `,
     transparent: true,
   });
@@ -208,36 +142,54 @@ function createStarField() {
     });
 
     if (points.length >= 4) {
-      // Use ConvexGeometry for 4 or more points
-      const geometry = new THREE.ConvexGeometry(points);
+      // Create a custom shape using BufferGeometry
+      const vertices = [];
+      points.forEach((point) => {
+        vertices.push(point.x, point.y, point.z);
+      });
+    
+      // Define faces for the 4-point shape (triangle faces)
+      const indices = [
+        0, 1, 2, // Triangle 1
+        2, 3, 0, // Triangle 2
+      ];
+    
+      // Create BufferGeometry
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute(
+        "position",
+        new THREE.Float32BufferAttribute(vertices, 3)
+      );
+      geometry.setIndex(indices);
+      geometry.computeVertexNormals();
+    
       const material = new THREE.MeshBasicMaterial({
         color: 0x0000ff,
-        opacity: 0.1, // Start as invisible
+        opacity: 0.5, // Adjust opacity for visibility
         transparent: true,
         side: THREE.DoubleSide,
       });
+    
       const mesh = new THREE.Mesh(geometry, material);
-      mesh.userData = { constellationName: constellation.name };
+      mesh.userData = { name: constellation.name };
       scene.add(mesh);
-  
-      // Calculate bounding box of the mesh
-      const boundingBox = new THREE.Box3().setFromObject(mesh);
-      const boxSize = boundingBox.getSize(new THREE.Vector3());
-  
-      // Create an enlarged hitbox
-      const expandFactor = 1.5; // Increase size by 50%
-      const hitboxGeometry = new THREE.BoxGeometry(
-        boxSize.x * expandFactor,
-        boxSize.y * expandFactor,
-        boxSize.z * expandFactor
+    
+      // Calculate bounding sphere for a more accurate hitbox
+      const boundingSphere = new THREE.Sphere();
+      geometry.computeBoundingSphere();
+      boundingSphere.copy(geometry.boundingSphere);
+    
+      const hitboxGeometry = new THREE.SphereGeometry(
+        boundingSphere.radius * 1.5, // Expand radius slightly
+        16,
+        16
       );
       const hitboxMaterial = new THREE.MeshBasicMaterial({ visible: false });
       const hitbox = new THREE.Mesh(hitboxGeometry, hitboxMaterial);
-      hitbox.position.copy(boundingBox.getCenter(new THREE.Vector3()));
+      hitbox.position.copy(boundingSphere.center);
       hitbox.userData = {
         name: constellation.name,
         isConstellation: true,
-        linkedMesh: mesh, // Link to the actual constellation mesh
       };
       scene.add(hitbox);
       constellationMeshes.push(hitbox); // Add hitbox to raycastObjects
@@ -246,17 +198,31 @@ function createStarField() {
       const geometry = new THREE.BufferGeometry().setFromPoints(points);
       geometry.setIndex([0, 1, 2]);
       geometry.computeVertexNormals();
+
       if (geometry && geometry.attributes.position) {
         const material = new THREE.MeshBasicMaterial({
           color: 0x0000ff,
-          opacity: 0.1,
+          opacity: 0.5,
           transparent: true,
           side: THREE.DoubleSide,
         });
         const mesh = new THREE.Mesh(geometry, material);
-        mesh.userData = { constellationName: constellation.name };
+        mesh.userData = { name: constellation.name };
         scene.add(mesh);
         constellationMeshes.push(mesh);
+
+        // Add bounding sphere for raycasting
+        geometry.computeBoundingSphere(); // Compute the bounding sphere
+        const boundingSphere = geometry.boundingSphere; // Access the computed bounding sphere
+
+        const hitboxGeometry = new THREE.SphereGeometry(boundingSphere.radius * 1.5, 16, 16); // Scale radius
+        const hitboxMaterial = new THREE.MeshBasicMaterial({ visible: false }); // Invisible hitbox
+        const hitbox = new THREE.Mesh(hitboxGeometry, hitboxMaterial);
+        hitbox.position.copy(boundingSphere.center); // Set position to sphere's center
+        hitbox.userData = { name: constellation.name, isConstellation: true };
+
+        scene.add(hitbox);
+        constellationMeshes.push(hitbox);
       } else {
         console.warn(`Failed to create triangle for constellation ${constellation.name}`);
       }
@@ -266,14 +232,31 @@ function createStarField() {
       if (geometry && geometry.attributes.position) {
         const material = new THREE.LineBasicMaterial({
           color: 0x0000ff,
-          opacity: 0.0,
+          opacity: 0.5,
           transparent: true,
         });
+
         const line = new THREE.Line(geometry, material);
-        line.userData = { constellationName: constellation.name };
+        line.userData = { name: constellation.name };
         scene.add(line);
-        constellationMeshes.push(line);
-        debugger;
+        constellationMeshes.push(line); // Add the line to the raycasting array
+
+        // Create bounding sphere manually
+        const midpoint = new THREE.Vector3()
+          .addVectors(points[0], points[1])
+          .multiplyScalar(0.5); // Midpoint of the two points
+        const radius = points[0].distanceTo(points[1]) / 2; // Half the distance between the points
+
+        const hitboxGeometry = new THREE.SphereGeometry(radius * 1.5, 16, 16); // Expand radius
+        const hitboxMaterial = new THREE.MeshBasicMaterial({ visible: false }); // Invisible hitbox
+        const hitbox = new THREE.Mesh(hitboxGeometry, hitboxMaterial);
+        hitbox.position.copy(midpoint);
+        hitbox.userData = {
+          name: constellation.name,
+          isConstellation: true,
+        };
+        scene.add(hitbox);
+        constellationMeshes.push(hitbox); // Add hitbox to the raycasting array
       } else {
         console.warn(`Failed to create line for constellation ${constellation.name}`);
       }
@@ -329,28 +312,26 @@ function createStarField() {
 
     if (intersects.length > 0) {
       const intersectedObject = intersects[0].object;
-      const constellation = intersectedObject?.userData;
-      if (constellation?.isConstellation) {
-        console.log(constellation.name)
+      const object = intersectedObject?.userData;
+      if (object?.isConstellation) {
+        console.log(object.name)
         tooltip.style.display = 'block';
         tooltip.style.left = `${event.clientX + 10}px`;
         tooltip.style.top = `${event.clientY + 10}px`;
-        tooltip.textContent = constellation.name;
+        tooltip.textContent = object.name;
       } else {
-        const star = intersectedObject?.userData?.name;
+        const star = object?.name;
         if (star) {
-          //console.log(star)
-        //  debugger;
           tooltip.style.display = 'block';
           tooltip.style.left = `${event.clientX + 10}px`;
           tooltip.style.top = `${event.clientY + 10}px`;
-          tooltip.textContent = star.commonName;
+          tooltip.textContent = star.maoriName ? (star.maoriName + " / " + star.commonName) : star.commonName;
         } else {
-          //tooltip.style.display = 'none';
+          tooltip.style.display = 'none';
         }
       }
     } else {
-     // tooltip.style.display = 'none'; // Hide tooltip if nothing is hovered
+      tooltip.style.display = 'none'; // Hide tooltip if nothing is hovered
     }
   }
 
@@ -372,6 +353,9 @@ controls.minPolarAngle = 0;
 controls.maxPolarAngle = Math.PI;
 controls.minAzimuthAngle = -Infinity;
 controls.maxAzimuthAngle = Infinity;
+
+controls.minDistance = 10;
+controls.maxDistance = 5000;
 
 controls.update();
 
